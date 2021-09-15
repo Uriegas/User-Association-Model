@@ -76,66 +76,153 @@ Let us define the users (UE), the base stations (BS) and some important metrics 
 
 # ╔═╡ bccdfb49-781f-4c28-a7e5-1fa2c8010e2d
 begin
-	mutable struct BS
+	abstract type BS end
+	struct SBS <: BS
 		center::Tuple{Float64, Float64}
-		radius
+		radius::Float64
+		capacity # ∈ (0, 1)
+	end
+	mutable struct MBS <: BS
+		center::Tuple{Float64, Float64}
+		radius::Float64
+		capacity # ∈ (0, 1)
 	end
 	mutable struct UE
 		position::Tuple{Float64, Float64}
+		state::Vector # indices to BSs where dij < ci
 	end
+	UE(pos::Tuple{Float64, Float64}) = UE(pos, [])
+	UE(x::Float64, y::Float64) = UE((x,y),[])
+	
+	function distance(i::BS, j::UE)
+		Δx, Δy = i.center[1] - j.position[1], i.center[2] - j.position[2]
+		return abs(√(Δx^2 + Δy^2))
+	end
+	distance(j::UE, i::BS) = distance(i,j)
 end
 
-# ╔═╡ b189dad3-db3d-44d4-ae68-fa62074084d0
-function distance(i::BS, j::UE)
-	Δx, Δy = i.center[1] - j.position[1], i.center[2] - j.position[2]
-	return abs(√(Δx^2 + Δy^2))
+# ╔═╡ 7d25d1a7-c856-4903-8282-a56a1865dec7
+function generate_UEs(center::Tuple{Float64,Float64}, radius::Float64, num::Real)
+	xₙ, yₙ = center
+	MBSᵣ = radius
+	UEs = []
+	for j ∈ 1:num
+		r = MBSᵣ * sqrt(rand())
+		θ = 2π*rand()
+		x = xₙ+r*cos(θ)
+		y = yₙ+r*sin(θ)
+		UEⱼ = UE(x, y)
+		push!(UEs, UEⱼ)
+	end
+	UEs
 end
 
-# ╔═╡ 9aa1fb74-5282-4398-8b2b-a710d384df41
-distance(j::UE, i::BS) = distance(i,j)
-
-# ╔═╡ 452fdb8b-9cf0-4891-9591-4e42dcb9e9ea
-b = BS((10.0, 10.0), 5.0)
-
-# ╔═╡ 63eeea9e-f094-4e14-a2a6-17eb02476ee4
-u = UE((10.0, 20.0))
-
-# ╔═╡ 5a1035ff-f936-4e2e-bd62-8b3c52811b31
-distance(b, u)
-
-# ╔═╡ 65f4d1ae-3272-4f3e-8cfd-9d68d7a9f5ae
+# ╔═╡ b9d33b82-7da5-4aae-9fd6-5b65975fa16f
 md"""
-distance = $(@bind x Slider(1:10))
+This are the parameters
+
+SBS radius = $(@bind radius Slider(1:5, default=3, show_value=true))m
+
+MBS radius = $(@bind MBSᵣ Slider(1:10, default=5, show_value=true))m
 """
 
-# ╔═╡ 47d94cf3-4ea2-427c-8b47-d39447663a78
+# ╔═╡ 06f74e81-eb03-4ead-b2ed-3a8c284b5a0f
+md"""
+Now we generate the environment.
+"""
+
+# ╔═╡ 807f5198-b436-43f1-90ab-cae4b2dd2366
+@bind rerun Button("Regenerate UEs")
+
+# ╔═╡ 4f176e28-d41b-4f24-ae92-937d037483d2
 begin
-	begin
-		scatter(u.position)
-		scatter!(b.center)
-plot!([0,0],[0,1.1],arrow=true,color=:black,linewidth=2,label="")
+	Macro_BS = MBS((1,3), MBSᵣ, 1) #1 MBS
+	SBSs = [SBS(pos, radius, 1) for pos ∈ [(-1,2),(1,5),(3,2)]] #3 SBSs
+	BSs::Vector{BS} = SBSs # SBSs + MBS
+	push!(BSs, Macro_BS) # Add MBS to BSs
+	
+	rerun #For rerun button
+	UEs = generate_UEs(Macro_BS.center, Macro_BS.radius, 9) # 9 random UEs
+end
+
+# ╔═╡ ecddf2ea-6de5-4884-8295-d6e5d54c0ac2
+function clear_states!() #Clear the states of each UE to empty
+	for UEⱼ ∈ UEs
+		UEⱼ.state = []
 	end
 end
+
+# ╔═╡ 04d1eca8-4efb-4d84-9d53-3a1086f02422
+function get_states!() #for each UE find BSs that satisfy dᵢⱼ < cᵢ
+	# Note: in this function we should pass a variable of type Environment that has the UEs, BSs, etc.
+	clear_states!() # Fisrt, clear the states
+	
+	for UEⱼ ∈ UEs
+		for i ∈ 1:length(BSs)
+			BSᵢ = BSs[i]
+			if distance(UEⱼ, BSᵢ) < BSᵢ.radius
+				push!(UEⱼ.state, i)
+			end
+		end
+	end	
+end
+
+# ╔═╡ a568759a-7aa3-49cd-9b78-690463907b98
+get_states!()#Initialize state set of each UE
+
+# ╔═╡ 9d55f81b-6780-4bcf-8ef2-5db9283879ca
+[ UEⱼ.state for UEⱼ ∈ UEs]
 
 # ╔═╡ 36a13d79-8340-4b1b-920a-046d9d2a277b
 md"""
-# Reinforcement Learning
+## Reinforcement Learning
 """
+
+# ╔═╡ b81ef977-5162-456f-9370-da6a7f6a317e
+function take_action(ue::UE, macro_bs::MBS)#UE takes action
+	#Perform Deep Learning Analysis
+	i = deeplearning(ue);
+	return i # Number of BS to associate with
+end
 
 # ╔═╡ 66fa287e-ed30-4c3b-b0aa-d992304f3279
 plot( -5:0.01:5, x -> exp(-x^2), label = "Función gaussiana", title = L"e^{-x^2}" )
 
-# ╔═╡ 4ce4d887-9d32-45ae-8ffe-bac3812e6202
-max = 10
+# ╔═╡ 9175a953-ce7c-4a95-982c-14a03d735da0
+function circle(h, k, r)
+	θ = LinRange(0, 2π, 500)
+	h .+ r*sin.(θ), k .+ r*cos.(θ)
+end
 
-# ╔═╡ bff8f572-0fa7-4824-ac4a-2330a39f6724
-h, w = 10, 10
+# ╔═╡ b33642cf-9858-43b7-ab84-813eff674b51
+function BS_to_circle(bs::BS)
+	return circle(bs.center[1], bs.center[2], bs.radius)
+end
 
-# ╔═╡ ac081bca-8c8c-4f85-b913-9ab1ff58e8f6
-D = [(rand(1:h), rand(1:w)) for i ∈ 1:max]
+# ╔═╡ 3b66095f-00f4-4f06-8514-afea70862552
+begin
+	plot(aspect_ratio=1, leg=false)
+	
+	plot!(BS_to_circle(Macro_BS), fill=(0,:red), alpha=0.2)
+	
+	for SBSᵢ ∈ SBSs #Plot SBSs
+		plot!(BS_to_circle(SBSᵢ), fill=(0,:orange), alpha=0.6)
+	end
+	
+	for UEⱼ ∈ UEs #Plot UEs
+		scatter!(UEⱼ.position)
+	end
+	
+	plot!()
+end
 
-# ╔═╡ 07f6df23-d122-4bba-844f-5c2ccf35f35c
-plot(D, mode="markers")
+# ╔═╡ 96d2c6ab-99cf-4dbc-8931-7f60022c3db2
+begin
+	xₜ(t) = sin(t)
+	yₜ(t) = cos(t)
+	
+	plot(xₜ, yₜ, 0, 2π, leg=false, fill=(0,:orange), alpha=0.6, aspect_ratio=1)
+end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -1405,18 +1492,21 @@ version = "0.9.1+5"
 # ╟─7151d03e-650a-4983-9a5d-92706c41ffd6
 # ╟─3c589f6c-4951-41a3-9d44-85d4c89c539f
 # ╠═bccdfb49-781f-4c28-a7e5-1fa2c8010e2d
-# ╠═b189dad3-db3d-44d4-ae68-fa62074084d0
-# ╠═9aa1fb74-5282-4398-8b2b-a710d384df41
-# ╠═452fdb8b-9cf0-4891-9591-4e42dcb9e9ea
-# ╠═63eeea9e-f094-4e14-a2a6-17eb02476ee4
-# ╠═5a1035ff-f936-4e2e-bd62-8b3c52811b31
-# ╠═65f4d1ae-3272-4f3e-8cfd-9d68d7a9f5ae
-# ╠═47d94cf3-4ea2-427c-8b47-d39447663a78
+# ╠═7d25d1a7-c856-4903-8282-a56a1865dec7
+# ╠═04d1eca8-4efb-4d84-9d53-3a1086f02422
+# ╠═ecddf2ea-6de5-4884-8295-d6e5d54c0ac2
+# ╠═4f176e28-d41b-4f24-ae92-937d037483d2
+# ╠═a568759a-7aa3-49cd-9b78-690463907b98
+# ╟─b9d33b82-7da5-4aae-9fd6-5b65975fa16f
+# ╟─06f74e81-eb03-4ead-b2ed-3a8c284b5a0f
+# ╠═9d55f81b-6780-4bcf-8ef2-5db9283879ca
+# ╟─807f5198-b436-43f1-90ab-cae4b2dd2366
+# ╟─3b66095f-00f4-4f06-8514-afea70862552
 # ╟─36a13d79-8340-4b1b-920a-046d9d2a277b
+# ╠═b81ef977-5162-456f-9370-da6a7f6a317e
 # ╠═66fa287e-ed30-4c3b-b0aa-d992304f3279
-# ╠═4ce4d887-9d32-45ae-8ffe-bac3812e6202
-# ╠═bff8f572-0fa7-4824-ac4a-2330a39f6724
-# ╠═ac081bca-8c8c-4f85-b913-9ab1ff58e8f6
-# ╠═07f6df23-d122-4bba-844f-5c2ccf35f35c
+# ╠═9175a953-ce7c-4a95-982c-14a03d735da0
+# ╠═b33642cf-9858-43b7-ab84-813eff674b51
+# ╟─96d2c6ab-99cf-4dbc-8931-7f60022c3db2
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
